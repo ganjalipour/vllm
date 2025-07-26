@@ -1,0 +1,135 @@
+
+version: '3.8'
+
+services:
+  grafana:
+    container_name: grafana
+    build:
+      context: ./monitoring/grafana
+    ports:
+      - 3000:3000
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./secrets/admin_password:/run/secrets/admin_password:ro
+    environment:
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/admin_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+    restart: always
+
+  prometheus:
+    container_name: prometheus
+    build:
+      context: ./monitoring/prometheus
+    ports:
+      - 9090:9090
+    volumes:
+      - ./monitoring/prometheus/config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./secrets/inference_api_key:/run/secrets/inference_api_key:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+    restart: always
+
+  api:
+    container_name: api
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - 8000:8000
+    volumes:
+      - ./secrets/inference_base_url:/run/secrets/inference_base_url:ro
+      - ./secrets/inference_api_key:/run/secrets/inference_api_key:ro
+      - ./secrets/default_inference_model:/run/secrets/default_inference_model:ro
+    environment:
+      - ENV=development
+      - INFERENCE_BASE_URL=/run/secrets/inference_base_url
+      - INFERENCE_API_KEY=/run/secrets/inference_api_key
+      - DEFAULT_INFERENCE_MODEL=/run/secrets/default_inference_model
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+    restart: always
+
+  ui:
+    container_name: ui
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    ports:
+      - 8501:8501
+    volumes:
+      - ./secrets/fastapi_url:/run/secrets/fastapi_url:ro
+    environment:
+      - ENV=development
+      - FASTAPI_URL=/run/secrets/fastapi_url
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: always
+    depends_on:
+      - api
+
+  inference:
+    image: inference
+    container_name: inference
+    build:
+      context: ./inference
+      dockerfile: Dockerfile
+    ports:
+      - 8001:8000
+    volumes:
+      - ./secrets/inference_api_key:/run/secrets/inference_api_key:ro
+      - /home/models/Mistral-Small-3.1-24B-Instruct-2503-UD-IQ2_XXS:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always
+    entrypoint: sh
+    command:
+      - -c
+      - |
+        /app/llama-server \
+        -m /models/Mistral-Small-3.1-24B-Instruct-2503-UD-IQ2_XXS.gguf \
+        --host 0.0.0.0 \
+        --port 8000 \
+        -n 8192 \
+        --n-gpu-layers 42 \
+        -np 4 \
+        --api-key $(cat /run/secrets/inference_api_key) \
+        --metrics
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+secrets:
+  admin_password:
+    environment: GF_SECURITY_ADMIN_PASSWORD
+  inference_api_key:
+    environment: INFERENCE_API_KEY

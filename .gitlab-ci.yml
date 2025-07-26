@@ -1,0 +1,109 @@
+stages:
+  - lint
+  - test
+  - deploy
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DEPLOY_PATH: /home/$DEPLOY_USER/omega
+
+.lint_template: &lint_job
+  image: python:3.12.10-slim
+  stage: lint
+  before_script:
+    - pip install flake8
+    - pip install -r ${SERVICE_PATH}/requirements.txt
+  script:
+    - cd ${SERVICE_PATH} && flake8 .
+
+.test_template: &test_job
+  image: python:3.12.10-slim
+  stage: test
+  before_script:
+    - pip install pytest
+    - pip install -r ${SERVICE_PATH}/requirements.txt
+  script:
+    - cd ${SERVICE_PATH}
+    - export PYTHONPATH=$(pwd)
+    - pytest --maxfail=1 --disable-warnings -q
+
+# API
+lint_api:
+  <<: *lint_job
+  variables:
+    SERVICE_PATH: api
+
+test_api:
+  <<: *test_job
+  variables:
+    SERVICE_PATH: api
+
+# UI
+lint_ui:
+  <<: *lint_job
+  variables:
+    SERVICE_PATH: ui
+
+test_ui:
+  <<: *test_job
+  variables:
+    SERVICE_PATH: ui
+
+# INFERENCE
+lint_inference:
+  <<: *lint_job
+  variables:
+    SERVICE_PATH: inference
+
+test_inference:
+  <<: *test_job
+  variables:
+    SERVICE_PATH: inference
+
+deploy_all_services:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh git
+    - echo "$SSH_PRIVATE_KEY_B64" | base64 -d > /tmp/deploy_key
+    - chmod 600 /tmp/deploy_key
+    - mkdir -p ~/.ssh
+    - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+  script:
+  # Remove previous project folder if exists, create fresh deploy directory
+  - ssh -i /tmp/deploy_key $DEPLOY_USER@$DEPLOY_HOST "rm -rf $DEPLOY_PATH && mkdir -p $DEPLOY_PATH"
+
+  # Transfer all project files to VM2 via SCP
+  - scp -i /tmp/deploy_key -r * $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/
+
+  # Create secrets as individual files inside the 'secrets' folder
+  - |
+    ssh -i /tmp/deploy_key $DEPLOY_USER@$DEPLOY_HOST "
+      export PATH=/usr/bin:/bin:/usr/local/bin:\$PATH && \
+      mkdir -p $DEPLOY_PATH/secrets && \
+      echo \"$GRAFANA_ADMIN_PASS\" > $DEPLOY_PATH/secrets/admin_password && \
+      echo \"$INFERENCE_API_KEY\" > $DEPLOY_PATH/secrets/inference_api_key && \
+      echo \"$INFERENCE_BASE_URL\" > $DEPLOY_PATH/secrets/inference_base_url && \
+      echo \"$DEFAULT_INFERENCE_MODEL\" > $DEPLOY_PATH/secrets/default_inference_model && \
+      echo \"$FASTAPI_URL\" > $DEPLOY_PATH/secrets/fastapi_url && \
+      chmod 644 $DEPLOY_PATH/secrets/*
+    "
+
+  # Debug: verify Docker and Docker Compose are accessible in the remote session
+  - |
+    ssh -i /tmp/deploy_key $DEPLOY_USER@$DEPLOY_HOST "
+      export PATH=/usr/bin:/bin:/usr/local/bin:\$PATH && \
+      echo '🔧 PATH=' \$PATH && which docker && docker --version && docker compose version
+    "
+
+  # Stop existing containers (if running) and start fresh deployment
+  - |
+    ssh -i /tmp/deploy_key $DEPLOY_USER@$DEPLOY_HOST "
+      export PATH=/usr/bin:/bin:/usr/local/bin:\$PATH && \
+      cd $DEPLOY_PATH && \
+      docker compose down --remove-orphans || true && \
+      docker compose up -d --build
+    "
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^release\//'
+

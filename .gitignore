@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.eggs/
+*.manifest
+*.spec
+
+# Python test cache
+.pytest_cache/
+.cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+
+# Inference
+/inference/gpt2
+/inference/venv
+/inference/.env
+/inference/vllm
+
+# api
+/api/venv
+/api/.env
+
+# ui
+/ui/.env
+/ui/venv/
+
+# Docker
+*.log
+*.pid
+*.tar
+docker-compose.override.yml
+.env
+monitoring/secrets/admin_password
+
+venv/
+.venv/
+env/
+ENV/
+ui/venv/
+
+# VSCode
+.vscode/
+
+# Mac
+.DS_Store
+
+# Test folders
+/tests
+
+# Secrets
+/secrets/*
